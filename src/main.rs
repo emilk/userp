@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, ffi::OsStr, path::Path};
+use std::{
+    collections::BTreeMap,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use {
     combine::{
@@ -11,6 +15,7 @@ use {
         Parser, Stream,
     },
     itertools::Itertools,
+    structopt::StructOpt,
 };
 
 // ----------------------------------------------------------------------------
@@ -195,11 +200,28 @@ fn format_mod(name: String, node: Node) -> String {
     }
 }
 
-fn format_use_statements(visibility: &str, mut node: Node) -> String {
+fn format_use_statements(visibility: &str, mut node: Node, special_crates: &[String]) -> String {
     let std = node.0.remove("std");
     let crate_ = node.0.remove("crate");
     let super_ = node.0.remove("super");
     let self_ = node.0.remove("self");
+
+    let specials = Node(
+        special_crates
+            .iter()
+            .filter_map(|name| {
+                if let Some(node) = node.0.remove(name) {
+                    Some((name.to_string(), node))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    );
+
+    let third_party = node;
+
+    // --------------------------------
 
     let mut code = String::new();
     if let Some(std) = std {
@@ -210,9 +232,12 @@ fn format_use_statements(visibility: &str, mut node: Node) -> String {
         );
     }
 
-    // 3rd party:
-    if !node.0.is_empty() {
-        code += &format!("{}use {};\n\n", visibility, format_nodes(node));
+    if !third_party.0.is_empty() {
+        code += &format!("{}use {};\n\n", visibility, format_nodes(third_party));
+    }
+
+    if !specials.0.is_empty() {
+        code += &format!("{}use {};\n\n", visibility, format_nodes(specials));
     }
 
     if let Some(crate_) = crate_ {
@@ -242,7 +267,11 @@ fn format_use_statements(visibility: &str, mut node: Node) -> String {
     code
 }
 
-fn append(out_code: &mut String, use_statements: &mut Vec<UseStatement>) {
+fn append(
+    out_code: &mut String,
+    use_statements: &mut Vec<UseStatement>,
+    special_crates: &[String],
+) {
     if !use_statements.is_empty() {
         let (private, public) = into_node(std::mem::replace(use_statements, Default::default()));
 
@@ -256,12 +285,12 @@ fn append(out_code: &mut String, use_statements: &mut Vec<UseStatement>) {
             *out_code += "\n\n";
         }
 
-        *out_code += &format_use_statements("", private);
-        *out_code += &format_use_statements("pub ", public);
+        *out_code += &format_use_statements("", private, special_crates);
+        *out_code += &format_use_statements("pub ", public, special_crates);
     }
 }
 
-fn prettify_code(in_code: &str) -> Result<String, String> {
+fn prettify_code(in_code: &str, special_crates: &[String]) -> Result<String, String> {
     let (statements, rest_of_the_file) = statements()
         .easy_parse(State::new(in_code.trim()))
         .map_err(|e| e.to_string())?;
@@ -275,7 +304,7 @@ fn prettify_code(in_code: &str) -> Result<String, String> {
                 use_statements.push(use_statement);
             }
             Statement::Other(line) => {
-                append(&mut out_code, &mut use_statements);
+                append(&mut out_code, &mut use_statements, special_crates);
 
                 out_code += &line;
                 out_code += "\n";
@@ -283,20 +312,20 @@ fn prettify_code(in_code: &str) -> Result<String, String> {
         }
     }
 
-    append(&mut out_code, &mut use_statements);
+    append(&mut out_code, &mut use_statements, special_crates);
 
     Ok(format!("{}{}\n", out_code, rest_of_the_file.input))
 }
 
 // ----------------------------------------------------------------------------
 
-fn run_file(path: &Path) -> Result<(), String> {
+fn run_file(path: &Path, special_crates: &[String]) -> Result<(), String> {
     if path.extension() != Some(OsStr::new("rs")) {
         return Ok(());
     }
     // println!("{:?}", path);
     let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let pretty = prettify_code(&contents)?;
+    let pretty = prettify_code(&contents, special_crates)?;
     std::fs::write(path, pretty).map_err(|e| e.to_string())?;
 
     std::process::Command::new("cargo")
@@ -309,34 +338,45 @@ fn run_file(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn run_path(path: &str) {
-    let path = Path::new(path);
+fn run_path(path: &Path, special_crates: &[String]) {
     if path.is_dir() {
         for path in ignore::Walk::new(path)
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension() == Some(OsStr::new("rs")))
         {
             let path = path.path();
-            if let Err(err) = run_file(path) {
+            if let Err(err) = run_file(path, special_crates) {
                 eprintln!("ERROR processing '{}': {}", path.display(), err);
             }
         }
     } else {
-        if let Err(err) = run_file(path) {
+        if let Err(err) = run_file(path, special_crates) {
             eprintln!("ERROR processing '{}': {}", path.display(), err);
         }
     }
 }
 
+#[derive(StructOpt, Debug)]
+#[structopt(name = "userp")]
+struct Opt {
+    /// Special crates to put after third party crates, e.g. --special foo,bar,baz
+    #[structopt(short, long)]
+    special: Vec<String>,
+
+    /// File(s) or folder(s) to process
+    #[structopt(name = "FILE", parse(from_os_str))]
+    paths: Vec<PathBuf>,
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.is_empty() || args[0] == "--help" {
+    let opt = Opt::from_args();
+    if opt.paths.is_empty() {
         eprintln!("Usage: userp file_or_dir [file_or_dir...]");
-        eprintln!("userp clean up the use:: directives in all rust files.");
+        eprintln!("userp cleans up the use:: directives in all rust files, recursively.");
         std::process::exit(1);
     }
-    for path in args {
-        run_path(&path);
+    for path in &opt.paths {
+        run_path(&path, &opt.special);
     }
 }
 
@@ -368,13 +408,13 @@ mod tests {
 
     #[macro_export]
     macro_rules! collect {
-		($($expr: expr),*) => {
-			vec![$($expr),*].into_iter().collect()
-		};
-		($($expr: expr,)*) => {
-			vec![$($expr),*].into_iter().collect()
-		}
-	}
+        ($($expr: expr),*) => {
+            vec![$($expr),*].into_iter().collect()
+        };
+        ($($expr: expr,)*) => {
+            vec![$($expr),*].into_iter().collect()
+        }
+    }
 
     #[test]
     fn parse() {
@@ -479,7 +519,7 @@ second line of the rest of the file
     #[test]
     fn prettify_noop_1() {
         let code = "rest_of_the_file";
-        assert_eq_str!(prettify_code(code).unwrap().trim(), code);
+        assert_eq_str!(prettify_code(code, &[]).unwrap().trim(), code);
     }
 
     #[test]
@@ -488,10 +528,10 @@ second line of the rest of the file
 use crate::proc::functions::JsFunctions;
 
 foo
-		"#
+        "#
         .trim();
 
-        assert_eq_str!(prettify_code(code).unwrap().trim(), code);
+        assert_eq_str!(prettify_code(code, &[]).unwrap().trim(), code);
     }
 
     #[test]
@@ -499,7 +539,7 @@ foo
         let in_code = "use futures::{future, future::Future, sync::mpsc};";
         let out_code = "use futures::{future::{Future, self}, sync::mpsc};";
 
-        assert_eq_str!(prettify_code(in_code).unwrap().trim(), out_code);
+        assert_eq_str!(prettify_code(in_code, &[]).unwrap().trim(), out_code);
     }
 
     #[test]
@@ -510,7 +550,7 @@ use under_score::number_42;
 #[test]
 fn foo() {}
 "#;
-        assert_eq_str!(prettify_code(in_code).unwrap().trim(), in_code.trim());
+        assert_eq_str!(prettify_code(in_code, &[]).unwrap().trim(), in_code.trim());
     }
 
     #[test]
@@ -538,7 +578,7 @@ use crate::{badger, foo::{bar, baz}};
 rest_of_the_file"#
             .trim();
 
-        assert_eq_str!(prettify_code(in_code).unwrap().trim(), expected_code);
+        assert_eq_str!(prettify_code(in_code, &[]).unwrap().trim(), expected_code);
     }
 
     #[test]
@@ -549,7 +589,7 @@ use std::collections::HashMap;
 use std::error::Error;
 
 struct {
-	x: i32,
+    x: i32,
 }
 
 use crate::js::{walk_expr, walk_stat, JsExpr, JsStat, Symbol, SymbolFactory, Visitor};
@@ -557,13 +597,13 @@ use crate::js::{walk_expr, walk_stat, JsExpr, JsStat, Symbol, SymbolFactory, Vis
 use std::fmt;
 
 use crate::proc::{
-	functions::JsFunctions, prng::Prng, render::ProceduralJsRenderer, InstructionNode, ProcError,
+    functions::JsFunctions, prng::Prng, render::ProceduralJsRenderer, InstructionNode, ProcError,
 };
 
 #[derive(Debug)]
 pub enum InternerError {
-	Procedural(ProcError),
-	InvariantFailed,
+    Procedural(ProcError),
+    InvariantFailed,
 }"#
         .trim();
 
@@ -573,7 +613,7 @@ pub enum InternerError {
 use std::{collections::HashMap, error::Error};
 
 struct {
-	x: i32,
+    x: i32,
 }
 
 use std::fmt;
@@ -582,13 +622,13 @@ use crate::{js::{JsExpr, JsStat, Symbol, SymbolFactory, Visitor, walk_expr, walk
 
 #[derive(Debug)]
 pub enum InternerError {
-	Procedural(ProcError),
-	InvariantFailed,
+    Procedural(ProcError),
+    InvariantFailed,
 }
 "#
-		.trim();
+        .trim();
 
-        assert_eq_str!(prettify_code(in_code).unwrap().trim(), expected_code);
+        assert_eq_str!(prettify_code(in_code, &[]).unwrap().trim(), expected_code);
     }
 
     #[test]
@@ -614,7 +654,7 @@ pub use {cache::{AccountConfigs, AccountConfigsHealth}, compile::Error};
 "#
         .trim();
 
-        assert_eq_str!(prettify_code(in_code).unwrap().trim(), expected_code);
+        assert_eq_str!(prettify_code(in_code, &[]).unwrap().trim(), expected_code);
     }
 
 }
