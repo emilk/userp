@@ -250,7 +250,11 @@ fn append(out_code: &mut String, use_statements: &mut Vec<UseStatement>) {
         while out_code.ends_with("\n") {
             out_code.pop();
         }
-        *out_code += "\n\n";
+        if out_code.ends_with('{') {
+            *out_code += "\n";
+        } else {
+            *out_code += "\n\n";
+        }
 
         *out_code += &format_use_statements("", private);
         *out_code += &format_use_statements("pub ", public);
