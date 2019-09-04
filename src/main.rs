@@ -7,7 +7,7 @@ use combine::{
 	char::{char, spaces, string},
 	choice,
 	error::ParseError,
-	many, many1, optional, parser, satisfy, sep_end_by,
+	many, many1, none_of, optional, parser, satisfy, sep_end_by,
 	stream::state::State,
 	Parser, Stream,
 };
@@ -26,6 +26,12 @@ enum Tree {
 struct UseStatement {
 	public: bool,
 	tree: Tree,
+}
+
+#[derive(Debug, PartialEq)]
+enum Statement {
+	Use(UseStatement),
+	Other(String),
 }
 
 fn lex_char<I>(c: char) -> impl Parser<Input = I, Output = char>
@@ -90,23 +96,30 @@ where
 	I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
 	attempt((
+		spaces(),
 		optional(attempt(string("pub"))).skip(spaces().silent()),
 		string("use").skip(spaces().silent()),
 		tree(),
 		lex_char(';'),
 	))
-	.map(|(public, _, tree, _)| UseStatement {
+	.map(|(_, public, _, tree, _)| UseStatement {
 		public: public.is_some(),
 		tree,
 	})
 }
 
-fn use_statements<I>() -> impl Parser<Input = I, Output = Vec<UseStatement>>
+fn statements<I>() -> impl Parser<Input = I, Output = Vec<Statement>>
 where
 	I: Stream<Item = char>,
 	I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
-	many(use_statement())
+	let line = (many1(none_of("\n".chars())), optional(char('\n')));
+
+	many(choice((
+		use_statement().map(Statement::Use),
+		line.map(|(line, _)| Statement::Other(line)),
+		char('\n').map(|_| Statement::Other(String::new())),
+	)))
 }
 
 // ----------------------------------------------------------------------------
@@ -168,7 +181,7 @@ fn format_nodes(node: Node) -> String {
 }
 
 fn format_mod(name: String, node: Node) -> String {
-	if name == "self" {
+	if name == "self" && node.0.is_empty() {
 		name
 	} else if node.0.len() == 1 && node.0.contains_key("self") {
 		name
@@ -181,6 +194,7 @@ fn format_use_statements(visibility: &str, mut node: Node) -> String {
 	let std = node.0.remove("std");
 	let crate_ = node.0.remove("crate");
 	let super_ = node.0.remove("super");
+	let self_ = node.0.remove("self");
 
 	let mut code = String::new();
 	if let Some(std) = std {
@@ -200,20 +214,53 @@ fn format_use_statements(visibility: &str, mut node: Node) -> String {
 		code += &format!("{}use {};\n\n", visibility, format_mod("super".to_string(), super_));
 	}
 
+	if let Some(self_) = self_ {
+		code += &format!("{}use {};\n\n", visibility, format_mod("self".to_string(), self_));
+	}
+
 	code
 }
 
+fn append(out_code: &mut String, use_statements: &mut Vec<UseStatement>) {
+	if !use_statements.is_empty() {
+		let (private, public) = into_node(std::mem::replace(use_statements, Default::default()));
+
+		// Ensure two newlines before:
+		while out_code.ends_with("\n") {
+			out_code.pop();
+		}
+		*out_code += "\n\n";
+
+		*out_code += &format_use_statements("", private);
+		*out_code += &format_use_statements("pub ", public);
+	}
+}
+
 fn prettify_code(in_code: &str) -> Result<String, String> {
-	let (trees, rest_of_the_file) = use_statements()
+	let (statements, rest_of_the_file) = statements()
 		.easy_parse(State::new(in_code.trim()))
 		.map_err(|e| e.to_string())?;
-	let (private, public) = into_node(trees);
-	Ok(format!(
-		"{}{}{}\n",
-		format_use_statements("", private),
-		format_use_statements("pub ", public),
-		rest_of_the_file.input
-	))
+
+	let mut out_code = String::new();
+	let mut use_statements = vec![];
+
+	for statement in statements {
+		match statement {
+			Statement::Use(use_statement) => {
+				use_statements.push(use_statement);
+			}
+			Statement::Other(line) => {
+				append(&mut out_code, &mut use_statements);
+
+				out_code += &line;
+				out_code += "\n";
+			}
+		}
+	}
+
+	append(&mut out_code, &mut use_statements);
+
+	Ok(format!("{}{}\n", out_code, rest_of_the_file.input))
 }
 
 // ----------------------------------------------------------------------------
@@ -272,33 +319,58 @@ fn main() {
 mod tests {
 	use super::*;
 
+	use pretty_assertions::assert_eq;
+
+	/// Wrapper around string slice that makes debug output `{:?}` to print string same way as `{}`.
+	/// Used in different `assert*!` macros in combination with `pretty_assertions` crate to make
+	/// test failures to show nice diffs.
+	#[derive(PartialEq, Eq)]
+	#[doc(hidden)]
+	pub struct PrettyString<'a>(pub &'a str);
+
+	/// Make diff to display string as multi-line string
+	impl<'a> std::fmt::Debug for PrettyString<'a> {
+		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+			f.write_str(self.0)
+		}
+	}
+
+	macro_rules! assert_eq_str {
+		($left:expr, $right:expr) => {
+			pretty_assertions::assert_eq!(PrettyString($left), PrettyString($right));
+		};
+	}
+
 	#[macro_export]
 	macro_rules! collect {
-	    ($($expr: expr),*) => {
-	        vec![$($expr),*].into_iter().collect()
-	    };
-	    ($($expr: expr,)*) => {
-	        vec![$($expr),*].into_iter().collect()
-	    }
+		($($expr: expr),*) => {
+			vec![$($expr),*].into_iter().collect()
+		};
+		($($expr: expr,)*) => {
+			vec![$($expr),*].into_iter().collect()
+		}
 	}
 
 	#[test]
 	fn parse() {
 		let code = r#"
-			use std::collections::HashMap;
+use std::collections::HashMap;
 
-			use std::collections::{HashSet, BTreeSet};
-			use {serde, combine::*};
-			use itertools::Iterator;
+use std::collections::{HashSet, BTreeSet};
+use {serde, combine::*};
+use itertools::Iterator;
 
-			rest_of_the_file"#
-			.trim();
-		let parse_result = use_statements().parse(code);
-		let (trees, rest_of_the_file) = parse_result.unwrap_or_else(|err| panic!("Failed to parse: {}", err));
+first line of the rest of the file
+second line of the rest of the file
+"#
+		.trim();
+
+		let parse_result = statements().parse(code);
+		let (statements, rest_of_the_file) = parse_result.unwrap_or_else(|err| panic!("Failed to parse: {}", err));
 		assert_eq!(
-			trees,
+			statements,
 			vec![
-				UseStatement {
+				Statement::Use(UseStatement {
 					public: false,
 					tree: Tree::Word(
 						"std".to_string(),
@@ -307,8 +379,8 @@ mod tests {
 							Some(Box::new(Tree::Word("HashMap".to_string(), None)))
 						)))
 					)
-				},
-				UseStatement {
+				}),
+				Statement::Use(UseStatement {
 					public: false,
 					tree: Tree::Word(
 						"std".to_string(),
@@ -320,24 +392,26 @@ mod tests {
 							]))),
 						)))
 					)
-				},
-				UseStatement {
+				}),
+				Statement::Use(UseStatement {
 					public: false,
 					tree: Tree::Braces(vec![
 						Tree::Word("serde".to_string(), None),
 						Tree::Word("combine".to_string(), Some(Box::new(Tree::Star))),
 					])
-				},
-				UseStatement {
+				}),
+				Statement::Use(UseStatement {
 					public: false,
 					tree: Tree::Word(
 						"itertools".to_string(),
 						Some(Box::new(Tree::Word("Iterator".to_string(), None)))
 					)
-				},
+				}),
+				Statement::Other("first line of the rest of the file".to_string()),
+				Statement::Other("second line of the rest of the file".to_string()),
 			],
 		);
-		assert_eq!(rest_of_the_file, "rest_of_the_file");
+		assert_eq!(rest_of_the_file, "");
 
 		let leaf = |name: &str| {
 			(
@@ -346,7 +420,15 @@ mod tests {
 			)
 		};
 
-		let (private, public) = into_node(trees);
+		let use_statements = statements
+			.into_iter()
+			.filter_map(|s| match s {
+				Statement::Use(use_statement) => Some(use_statement),
+				Statement::Other(_) => None,
+			})
+			.collect();
+
+		let (private, public) = into_node(use_statements);
 		assert_eq!(
 			private,
 			Node(collect![
@@ -371,7 +453,7 @@ mod tests {
 	#[test]
 	fn prettify_noop_1() {
 		let code = "rest_of_the_file";
-		assert_eq!(prettify_code(code).unwrap().trim(), code);
+		assert_eq_str!(prettify_code(code).unwrap().trim(), code);
 	}
 
 	#[test]
@@ -383,7 +465,7 @@ foo
 		"#
 		.trim();
 
-		assert_eq!(prettify_code(code).unwrap().trim(), code);
+		assert_eq_str!(prettify_code(code).unwrap().trim(), code);
 	}
 
 	#[test]
@@ -391,7 +473,7 @@ foo
 		let in_code = "use futures::{future, future::Future, sync::mpsc};";
 		let out_code = "use futures::{future::{Future, self}, sync::mpsc};";
 
-		assert_eq!(prettify_code(in_code).unwrap().trim(), out_code);
+		assert_eq_str!(prettify_code(in_code).unwrap().trim(), out_code);
 	}
 
 	#[test]
@@ -402,7 +484,7 @@ use under_score::number_42;
 #[test]
 fn foo() {}
 "#;
-		assert_eq!(prettify_code(in_code).unwrap().trim(), in_code.trim());
+		assert_eq_str!(prettify_code(in_code).unwrap().trim(), in_code.trim());
 	}
 
 	#[test]
@@ -419,6 +501,7 @@ use std::collections::HashMap;
 
 rest_of_the_file"#
 			.trim();
+
 		let expected_code = r#"
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -429,42 +512,83 @@ use crate::{badger, foo::{bar, baz}};
 rest_of_the_file"#
 			.trim();
 
-		assert_eq!(prettify_code(in_code).unwrap().trim(), expected_code);
+		assert_eq_str!(prettify_code(in_code).unwrap().trim(), expected_code);
 	}
 
 	#[test]
 	fn test_prettify_2() {
 		let in_code = r#"
+// Intro comment
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt;
+
+struct {
+	x: i32,
+}
 
 use crate::js::{walk_expr, walk_stat, JsExpr, JsStat, Symbol, SymbolFactory, Visitor};
 
+use std::fmt;
+
 use crate::proc::{
-    functions::JsFunctions, prng::Prng, render::ProceduralJsRenderer, InstructionNode, ProcError,
+	functions::JsFunctions, prng::Prng, render::ProceduralJsRenderer, InstructionNode, ProcError,
 };
 
 #[derive(Debug)]
 pub enum InternerError {
-    Procedural(ProcError),
-    InvariantFailed,
-}
-		"#
+	Procedural(ProcError),
+	InvariantFailed,
+}"#
 		.trim();
+
 		let expected_code = r#"
-use std::{collections::HashMap, error::Error, fmt};
+// Intro comment
+
+use std::{collections::HashMap, error::Error};
+
+struct {
+	x: i32,
+}
+
+use std::fmt;
 
 use crate::{js::{JsExpr, JsStat, Symbol, SymbolFactory, Visitor, walk_expr, walk_stat}, proc::{InstructionNode, ProcError, functions::JsFunctions, prng::Prng, render::ProceduralJsRenderer}};
 
 #[derive(Debug)]
 pub enum InternerError {
-    Procedural(ProcError),
-    InvariantFailed,
+	Procedural(ProcError),
+	InvariantFailed,
 }
 "#
 		.trim();
 
-		assert_eq!(prettify_code(in_code).unwrap().trim(), expected_code);
+		assert_eq_str!(prettify_code(in_code).unwrap().trim(), expected_code);
 	}
+
+	#[test]
+	fn test_prettify_3() {
+		let in_code = r#"
+// Foo
+
+// Bar
+
+pub use compile::Error;
+
+pub use cache::AccountConfigs;
+pub use cache::AccountConfigsHealth;
+"#
+		.trim();
+
+		let expected_code = r#"
+// Foo
+
+// Bar
+
+pub use {cache::{AccountConfigs, AccountConfigsHealth}, compile::Error};
+"#
+		.trim();
+
+		assert_eq_str!(prettify_code(in_code).unwrap().trim(), expected_code);
+	}
+
 }
