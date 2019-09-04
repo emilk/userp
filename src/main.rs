@@ -1,17 +1,17 @@
-use std::collections::BTreeMap;
-use std::ffi::OsStr;
-use std::path::Path;
+use std::{collections::BTreeMap, ffi::OsStr, path::Path};
 
-use combine::{
-	attempt,
-	char::{char, spaces, string},
-	choice,
-	error::ParseError,
-	many, many1, none_of, optional, parser, satisfy, sep_end_by,
-	stream::state::State,
-	Parser, Stream,
+use {
+	combine::{
+		attempt,
+		char::{char, spaces, string},
+		choice,
+		error::ParseError,
+		many, many1, none_of, optional, parser, satisfy, sep_end_by,
+		stream::state::State,
+		Parser, Stream,
+	},
+	itertools::Itertools,
 };
-use itertools::Itertools;
 
 // ----------------------------------------------------------------------------
 
@@ -317,9 +317,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-
 	use pretty_assertions::assert_eq;
+
+	use super::*;
 
 	/// Wrapper around string slice that makes debug output `{:?}` to print string same way as `{}`.
 	/// Used in different `assert*!` macros in combination with `pretty_assertions` crate to make
