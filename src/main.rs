@@ -168,12 +168,23 @@ fn into_node(statements: Vec<UseStatement>) -> (Node, Node) {
 
 // ----------------------------------------------------------------------------
 
-fn format_nodes(node: Node) -> String {
+fn format_nodes(mut node: Node) -> String {
     if node.0.contains_key("*") {
-        "*".to_string()
-    } else if node.0.len() == 1 {
-        let (name, node) = node.0.into_iter().next().unwrap();
-        format_mod(name, node)
+        // The star swallows everything but self:
+        node.0 = node
+            .0
+            .into_iter()
+            .filter(|(name, _)| name == "*" || name == "self")
+            .collect();
+    }
+
+    if node.0.len() == 1 {
+        if node.0.contains_key("*") {
+            "*".to_string()
+        } else {
+            let (name, node) = node.0.into_iter().next().unwrap();
+            format_mod(name, node)
+        }
     } else {
         format!(
             "{{{}}}",
@@ -187,6 +198,8 @@ fn format_nodes(node: Node) -> String {
 
 fn format_mod(name: String, node: Node) -> String {
     if name == "self" && node.0.is_empty() {
+        name
+    } else if name == "*" && node.0.is_empty() {
         name
     } else if node.0.len() == 1 && node.0.contains_key("self") {
         name
@@ -625,6 +638,23 @@ pub use cache::AccountConfigsHealth;
 // Bar
 
 pub use {cache::{AccountConfigs, AccountConfigsHealth}, compile::Error};
+"#
+        .trim();
+
+        assert_eq_str!(prettify_code(in_code, &[]).unwrap().trim(), expected_code);
+    }
+
+    #[test]
+    fn test_star_and_self() {
+        let in_code = r#"
+pub use foo::bar;
+pub use foo::bar::*;
+pub use foo::bar::baz;
+"#
+        .trim();
+
+        let expected_code = r#"
+pub use foo::bar::{*, self};
 "#
         .trim();
 
