@@ -52,12 +52,7 @@ where
     I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
-    (
-        lex_char('{'),
-        sep_end_by(tree(), lex_char(',')),
-        lex_char('}'),
-    )
-        .map(|(_, values, _)| Tree::Braces(values))
+    (lex_char('{'), sep_end_by(tree(), lex_char(',')), lex_char('}')).map(|(_, values, _)| Tree::Braces(values))
 }
 
 fn star<I>() -> impl Parser<Input = I, Output = Tree>
@@ -225,11 +220,7 @@ fn format_use_statements(visibility: &str, mut node: Node, special_crates: &[Str
 
     let mut code = String::new();
     if let Some(std) = std {
-        code += &format!(
-            "{}use {};\n\n",
-            visibility,
-            format_mod("std".to_string(), std)
-        );
+        code += &format!("{}use {};\n\n", visibility, format_mod("std".to_string(), std));
     }
 
     if !third_party.0.is_empty() {
@@ -241,37 +232,21 @@ fn format_use_statements(visibility: &str, mut node: Node, special_crates: &[Str
     }
 
     if let Some(crate_) = crate_ {
-        code += &format!(
-            "{}use {};\n\n",
-            visibility,
-            format_mod("crate".to_string(), crate_)
-        );
+        code += &format!("{}use {};\n\n", visibility, format_mod("crate".to_string(), crate_));
     }
 
     if let Some(super_) = super_ {
-        code += &format!(
-            "{}use {};\n\n",
-            visibility,
-            format_mod("super".to_string(), super_)
-        );
+        code += &format!("{}use {};\n\n", visibility, format_mod("super".to_string(), super_));
     }
 
     if let Some(self_) = self_ {
-        code += &format!(
-            "{}use {};\n\n",
-            visibility,
-            format_mod("self".to_string(), self_)
-        );
+        code += &format!("{}use {};\n\n", visibility, format_mod("self".to_string(), self_));
     }
 
     code
 }
 
-fn append(
-    out_code: &mut String,
-    use_statements: &mut Vec<UseStatement>,
-    special_crates: &[String],
-) {
+fn append(out_code: &mut String, use_statements: &mut Vec<UseStatement>, special_crates: &[String]) {
     if !use_statements.is_empty() {
         let (private, public) = into_node(std::mem::replace(use_statements, Default::default()));
 
@@ -431,8 +406,7 @@ second line of the rest of the file
         .trim();
 
         let parse_result = statements().parse(code);
-        let (statements, rest_of_the_file) =
-            parse_result.unwrap_or_else(|err| panic!("Failed to parse: {}", err));
+        let (statements, rest_of_the_file) = parse_result.unwrap_or_else(|err| panic!("Failed to parse: {}", err));
         assert_eq!(
             statements,
             vec![
