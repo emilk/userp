@@ -28,6 +28,9 @@ use crate::{badger, foo::{bar, baz}};
 
 * `use std::`
 * third party
+* workspace members
 * `use crate::`
 * `use super::`
 * `use self::`
+
+Workspace members are found by parsing the root `Cargo.toml`, or can be given with the `--special` flag.

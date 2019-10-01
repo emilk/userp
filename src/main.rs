@@ -307,6 +307,26 @@ fn prettify_code(in_code: &str, special_crates: &[String]) -> Result<String, Str
 
 // ----------------------------------------------------------------------------
 
+fn parse_workspace_cargo_toml(path: &Path) -> Option<Vec<String>> {
+    #[derive(Debug, serde::Deserialize)]
+    struct Workspace {
+        members: Option<Vec<String>>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Cargo {
+        workspace: Option<Workspace>,
+    }
+
+    let contents = std::fs::read_to_string(path).ok()?;
+    let cargo: Cargo = toml::from_str(&contents).ok()?;
+    let members = cargo.workspace.and_then(|w| w.members)?;
+    eprintln!("Respecting the members described at {}", path.display());
+    Some(members)
+}
+
+// ----------------------------------------------------------------------------
+
 fn run_file(path: &Path, special_crates: &[String]) -> Result<(), String> {
     if path.extension() != Some(OsStr::new("rs")) {
         return Ok(());
@@ -328,12 +348,20 @@ fn run_file(path: &Path, special_crates: &[String]) -> Result<(), String> {
 
 fn run_path(path: &Path, special_crates: &[String]) {
     if path.is_dir() {
+        let special_crates = if special_crates.is_empty() {
+            let mut cargo_toml_path = path.to_path_buf();
+            cargo_toml_path.push("Cargo.toml");
+            parse_workspace_cargo_toml(&cargo_toml_path).unwrap_or_default()
+        } else {
+            special_crates.to_vec()
+        };
+
         for path in ignore::Walk::new(path)
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension() == Some(OsStr::new("rs")))
         {
             let path = path.path();
-            if let Err(err) = run_file(path, special_crates) {
+            if let Err(err) = run_file(path, &special_crates) {
                 eprintln!("ERROR processing '{}': {}", path.display(), err);
             }
         }
@@ -348,6 +376,7 @@ fn run_path(path: &Path, special_crates: &[String]) {
 #[structopt(name = "userp")]
 struct Opt {
     /// Special crates to put after third party crates, e.g. --special foo,bar,baz
+    /// If none are given userp will attempt to use the workspace members of the root Cargo.toml
     #[structopt(short, long)]
     special: Vec<String>,
 
@@ -660,5 +689,4 @@ pub use foo::bar::{*, self};
 
         assert_eq_str!(prettify_code(in_code, &[]).unwrap().trim(), expected_code);
     }
-
 }

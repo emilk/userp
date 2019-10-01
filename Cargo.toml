@@ -10,5 +10,7 @@ edition = "2018"
 combine = "4.0.0-alpha.2"
 ignore = "0.4"
 itertools = "0.8"
-structopt = "0.3"
 pretty_assertions = "0.6"
+serde = { version = "1", features = ["derive"] }
+structopt = "0.3"
+toml = "0.5"
