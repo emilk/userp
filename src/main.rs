@@ -170,11 +170,11 @@ fn into_node(statements: Vec<UseStatement>) -> (Node, Node) {
 
 fn format_nodes(mut node: Node) -> String {
     if node.0.contains_key("*") {
-        // The star swallows everything but self:
+        // The star swallows everything but self or paths with sub components:
         node.0 = node
             .0
             .into_iter()
-            .filter(|(name, _)| name == "*" || name == "self")
+            .filter(|(name, inner_node)| name == "*" || name == "self" || inner_node.0.iter().any(|(name, _)| name != "self"))
             .collect();
     }
 
@@ -684,6 +684,22 @@ pub use foo::bar::baz;
 
         let expected_code = r#"
 pub use foo::bar::{*, self};
+"#
+        .trim();
+
+        assert_eq_str!(prettify_code(in_code, &[]).unwrap().trim(), expected_code);
+    }
+
+    #[test]
+    fn test_star_and_sub_component() {
+        let in_code = r#"
+use combine::*;
+use combine::char::alpha_num;
+"#
+        .trim();
+
+        let expected_code = r#"
+use combine::{*, char::alpha_num};
 "#
         .trim();
 
