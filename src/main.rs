@@ -6,13 +6,14 @@ use std::{
 
 use {
     combine::{
-        attempt,
-        char::{char, spaces, string},
-        choice,
+        attempt, choice,
         error::ParseError,
-        many, many1, none_of, optional, parser, satisfy, sep_end_by,
-        stream::state::State,
-        Parser, Stream,
+        many, many1, none_of, optional, parser,
+        parser::char::{char, spaces, string},
+        parser::EasyParser,
+        satisfy, sep_end_by,
+        stream::Stream,
+        Parser,
     },
     itertools::Itertools,
     structopt::StructOpt,
@@ -39,34 +40,39 @@ enum Statement {
     Other(String),
 }
 
-fn lex_char<I>(c: char) -> impl Parser<Input = I, Output = char>
+fn lex_char<Input>(c: char) -> impl Parser<Input, Output = char>
 where
-    I: Stream<Item = char>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
     char(c).skip(spaces().silent())
 }
 
-fn braces<I>() -> impl Parser<Input = I, Output = Tree>
+fn braces<Input>() -> impl Parser<Input, Output = Tree>
 where
-    I: Stream<Item = char>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    (lex_char('{'), sep_end_by(tree(), lex_char(',')), lex_char('}')).map(|(_, values, _)| Tree::Braces(values))
+    (
+        lex_char('{'),
+        sep_end_by(tree(), lex_char(',')),
+        lex_char('}'),
+    )
+        .map(|(_, values, _)| Tree::Braces(values))
 }
 
-fn star<I>() -> impl Parser<Input = I, Output = Tree>
+fn star<Input>() -> impl Parser<Input, Output = Tree>
 where
-    I: Stream<Item = char>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
     lex_char('*').map(|_| Tree::Star)
 }
 
-fn word<I>() -> impl Parser<Input = I, Output = Tree>
+fn word<Input>() -> impl Parser<Input, Output = Tree>
 where
-    I: Stream<Item = char>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
     (
         many1(satisfy(|c: char| c.is_alphanumeric() || c == '_')).skip(spaces().silent()),
@@ -78,27 +84,27 @@ where
         })
 }
 
-fn tree_<I>() -> impl Parser<Input = I, Output = Tree>
+fn tree_<Input>() -> impl Parser<Input, Output = Tree>
 where
-    I: Stream<Item = char>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
     choice((braces(), star(), word()))
 }
 
 // Fix for recursive type
 parser! {
-    fn tree[I]()(I) -> Tree
-    where [I: Stream<Item = char>]
+    fn tree[Input]()(Input) -> Tree
+    where [Input: Stream<Token = char>]
     {
         tree_()
     }
 }
 
-fn use_statement<I>() -> impl Parser<Input = I, Output = UseStatement>
+fn use_statement<Input>() -> impl Parser<Input, Output = UseStatement>
 where
-    I: Stream<Item = char>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
     attempt((
         spaces(),
@@ -113,10 +119,10 @@ where
     })
 }
 
-fn statements<I>() -> impl Parser<Input = I, Output = Vec<Statement>>
+fn statements<Input>() -> impl Parser<Input, Output = Vec<Statement>>
 where
-    I: Stream<Item = char>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
     let line = (many1(none_of("\n".chars())), optional(char('\n')));
 
@@ -174,7 +180,9 @@ fn format_nodes(mut node: Node) -> String {
         node.0 = node
             .0
             .into_iter()
-            .filter(|(name, inner_node)| name == "*" || name == "self" || inner_node.0.iter().any(|(name, _)| name != "self"))
+            .filter(|(name, inner_node)| {
+                name == "*" || name == "self" || inner_node.0.iter().any(|(name, _)| name != "self")
+            })
             .collect();
     }
 
@@ -233,7 +241,11 @@ fn format_use_statements(visibility: &str, mut node: Node, special_crates: &[Str
 
     let mut code = String::new();
     if let Some(std) = std {
-        code += &format!("{}use {};\n\n", visibility, format_mod("std".to_string(), std));
+        code += &format!(
+            "{}use {};\n\n",
+            visibility,
+            format_mod("std".to_string(), std)
+        );
     }
 
     if !third_party.0.is_empty() {
@@ -245,21 +257,37 @@ fn format_use_statements(visibility: &str, mut node: Node, special_crates: &[Str
     }
 
     if let Some(crate_) = crate_ {
-        code += &format!("{}use {};\n\n", visibility, format_mod("crate".to_string(), crate_));
+        code += &format!(
+            "{}use {};\n\n",
+            visibility,
+            format_mod("crate".to_string(), crate_)
+        );
     }
 
     if let Some(super_) = super_ {
-        code += &format!("{}use {};\n\n", visibility, format_mod("super".to_string(), super_));
+        code += &format!(
+            "{}use {};\n\n",
+            visibility,
+            format_mod("super".to_string(), super_)
+        );
     }
 
     if let Some(self_) = self_ {
-        code += &format!("{}use {};\n\n", visibility, format_mod("self".to_string(), self_));
+        code += &format!(
+            "{}use {};\n\n",
+            visibility,
+            format_mod("self".to_string(), self_)
+        );
     }
 
     code
 }
 
-fn append(out_code: &mut String, use_statements: &mut Vec<UseStatement>, special_crates: &[String]) {
+fn append(
+    out_code: &mut String,
+    use_statements: &mut Vec<UseStatement>,
+    special_crates: &[String],
+) {
     if !use_statements.is_empty() {
         let (private, public) = into_node(std::mem::replace(use_statements, Default::default()));
 
@@ -280,7 +308,7 @@ fn append(out_code: &mut String, use_statements: &mut Vec<UseStatement>, special
 
 fn prettify_code(in_code: &str, special_crates: &[String]) -> Result<String, String> {
     let (statements, rest_of_the_file) = statements()
-        .easy_parse(State::new(in_code.trim()))
+        .easy_parse(combine::stream::position::Stream::new(in_code.trim()))
         .map_err(|e| e.to_string())?;
 
     let mut out_code = String::new();
@@ -448,7 +476,8 @@ second line of the rest of the file
         .trim();
 
         let parse_result = statements().parse(code);
-        let (statements, rest_of_the_file) = parse_result.unwrap_or_else(|err| panic!("Failed to parse: {}", err));
+        let (statements, rest_of_the_file) =
+            parse_result.unwrap_or_else(|err| panic!("Failed to parse: {}", err));
         assert_eq!(
             statements,
             vec![
