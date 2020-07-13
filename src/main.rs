@@ -405,7 +405,7 @@ fn run_path(path: &Path, special_crates: &[String]) {
 struct Opt {
     /// Special crates to put after third party crates, e.g. --special foo,bar,baz
     /// If none are given userp will attempt to use the workspace members of the root Cargo.toml
-    #[structopt(short, long)]
+    #[structopt(short, long, use_delimiter = true)]
     special: Vec<String>,
 
     /// File(s) or folder(s) to process
