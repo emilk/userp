@@ -1,7 +1,9 @@
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
+    io::{self, Read, Write},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
 };
 
 use {
@@ -408,9 +410,41 @@ struct Opt {
     #[structopt(short, long)]
     special: Vec<String>,
 
-    /// File(s) or folder(s) to process
+    /// File(s) or folder(s) to process. When FILE is -, read standard
+    /// input.
+    ///
+    /// Except when reading from standard input, must be run from within
+    /// a valid Cargo working directory.
     #[structopt(name = "FILE", parse(from_os_str))]
     paths: Vec<PathBuf>,
+}
+
+fn run_stdin(special_crates: &[String]) {
+    let mut contents = String::new();
+    io::stdin().read_to_string(&mut contents).unwrap();
+
+    let prettified: String = match prettify_code(&contents, special_crates) {
+        Ok(prettified) => prettified,
+        Err(err) => {
+            eprintln!("ERROR processing from stdin: {}", err);
+            std::process::exit(1);
+        }
+    };
+
+    // The `cargo fmt` wrapper of `rustfmt` doesn't work for us when
+    // reading from stdin, since `cargo fmt` doesn't support that.
+    let mut rustfmt = Command::new("rustfmt")
+        .arg("--edition=2018")
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    rustfmt
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(prettified.as_bytes())
+        .unwrap();
+    rustfmt.wait().unwrap();
 }
 
 fn main() {
@@ -420,8 +454,13 @@ fn main() {
         eprintln!("userp cleans up the use:: directives in all rust files, recursively.");
         std::process::exit(1);
     }
-    for path in &opt.paths {
-        run_path(&path, &opt.special);
+
+    if opt.paths == vec![PathBuf::from("-")] {
+        run_stdin(&opt.special);
+    } else {
+        for path in &opt.paths {
+            run_path(&path, &opt.special);
+        }
     }
 }
 
