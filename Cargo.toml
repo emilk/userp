@@ -9,8 +9,8 @@ edition = "2018"
 [dependencies]
 combine = "4"
 ignore = "0.4"
-itertools = "0.8"
-pretty_assertions = "0.6"
+itertools = "0.10"
+pretty_assertions = "1.2"
 serde = { version = "1", features = ["derive"] }
 structopt = "0.3"
 toml = "0.5"
